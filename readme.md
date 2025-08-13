@@ -1,266 +1,118 @@
-﻿JWT Auth API (ASP.NET Core + EF Core)
-Kullanıcı yönetimi (login, rol-bazlı listeleme, CRUD) ve JWT ile kimlik doğrulama sağlayan ASP.NET Core Web API.
+JWT Auth Project API
+1. Proje Açıklaması
+Bu proje, ASP.NET Core ve Entity Framework Core kullanılarak geliştirilmiş bir JWT tabanlı kimlik doğrulama ve kullanıcı yönetim API’sidir.
+API, kullanıcı girişi, rol bazlı yetkilendirme, CRUD işlemleri ve JWT token üretimi gibi özellikler sunar.
 
-Özellikler
+2. Temel Özellikler
 JWT ile kimlik doğrulama
 
 Rol bazlı yetkilendirme
 
-Admin, Manager: tüm kullanıcıları görebilir, ekle/güncelle/sil yapabilir
+Admin, Manager: Tüm kullanıcıları görüntüleme, ekleme, güncelleme ve silme yetkisine sahip
 
-Chief, Staff: yalnızca Staff kullanıcılarını görebilir
+Chief, Staff: Yalnızca Staff kullanıcılarını görüntüleyebilir
 
-Kullanıcı modeli: Username, Password, Role, opsiyonel Email, Phone
+Kullanıcı modeli
 
-JWT payload’da role/email/phone claim’leri
+Username (zorunlu, benzersiz)
 
-EF Core + SQL Server, Username unique index
+Password (zorunlu)
 
-Gereksinimler
+Role (Admin, Chief, Manager, Staff)
+
+Opsiyonel: Email, Phone
+
+JWT Payload içerikleri
+
+Role, Email, Phone bilgileri claim olarak eklenir
+
+EF Core + SQL Server desteği
+
+3. Gereksinimler
 .NET SDK 8/9
 
-SQL Server (LocalDB/Express/Developer)
+SQL Server (LocalDB, Express veya Developer sürümü)
 
-(Geliştirme için) dotnet-ef araçları:
+dotnet-ef CLI aracı (veritabanı migration işlemleri için)
 
+4. Kurulum Adımları
+Bağımlılıkların Kurulması
 bash
 Kopyala
 Düzenle
 dotnet tool install --global dotnet-ef
-Hızlı Başlangıç
-appsettings.json → connection string ve JWT ayarlarını doldur:
+appsettings.json Düzenleme
+Connection string ve JWT ayarlarını kendi ortamınıza göre güncelleyin:
 
 json
 Kopyala
 Düzenle
-{
-  "ConnectionStrings": {
+"ConnectionStrings": {
     "DefaultConnection": "Server=DESKTOP-PLE8UBQ;Database=JwtAuthDb;Trusted_Connection=True;TrustServerCertificate=True;"
-  },
-  "Jwt": {
+},
+"Jwt": {
     "Key": "gizli_anahtar_burada_olacak_12345678",
     "Issuer": "JwtAuthApi",
     "Audience": "JwtAuthClient",
     "ExpireMinutes": 60
-  },
-  "Logging": { "LogLevel": { "Default": "Information", "Microsoft.AspNetCore": "Warning" } },
-  "AllowedHosts": "*"
 }
-Veritabanı şeması (ilk kurulum / model güncellemesi):
-
+Veritabanı Migration ve Güncelleme
 bash
 Kopyala
 Düzenle
-# Migration oluştur (tek DbContext: AppDbContext)
 dotnet ef migrations add InitialCreate --context AppDbContext
-# Veritabanını güncelle
 dotnet ef database update --context AppDbContext
-Çalıştırma
-
+5. Çalıştırma
 bash
 Kopyala
 Düzenle
 dotnet run
-Konsolda:
+Konsol çıktısı:
 
 nginx
 Kopyala
 Düzenle
 Now listening on: http://localhost:5000
 Now listening on: https://localhost:5001
-Geliştirme sertifikasını güvenilir yapmak için (ilk sefer):
+Geliştirme sertifikasını güvenilir yapmak için:
 
 bash
 Kopyala
 Düzenle
 dotnet dev-certs https --trust
-Mimarî Özeti
-Varlık (Entity)
-User.cs
+6. Önemli Endpoint’ler
+Kimlik Doğrulama
+POST /login → Kullanıcı giriş yapar ve JWT token alır
 
-csharp
-Kopyala
-Düzenle
-[Index(nameof(Username), IsUnique = true)]
-public class User
-{
-    public int Id { get; set; }
-    [Required, MaxLength(50)]
-    public string Username { get; set; } = string.Empty;
-    [Required, MaxLength(100)]
-    public string Password { get; set; } = string.Empty;
-    public UserRole Role { get; set; }               // 0=Admin, 1=Chief, 2=Manager, 3=Staff
-    [EmailAddress, MaxLength(254)] public string? Email { get; set; }
-    [Phone, MaxLength(20)]        public string? Phone { get; set; }
-}
-UserRole.cs
+Kullanıcı Yönetimi
+GET /User/users → Rolüne göre kullanıcı listesi
 
-csharp
-Kopyala
-Düzenle
-public enum UserRole { Admin = 0, Chief = 1, Manager = 2, Staff = 3 }
-DbContext
-AppDbContext.cs
+GET /User/{id} → Tek bir kullanıcı bilgisi
 
-csharp
-Kopyala
-Düzenle
-public class AppDbContext : DbContext
-{
-    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) {}
-    public DbSet<User> Users { get; set; }
-}
-JWT Üretimi
-TokenService.cs
+POST /User/create → Yeni kullanıcı ekler (Admin, Manager)
 
-csharp
-Kopyala
-Düzenle
-public string GenerateToken(string username, string role, string? email = null, string? phone = null)
-{
-    var claims = new List<Claim> {
-        new Claim(ClaimTypes.Name, username),
-        new Claim(ClaimTypes.Role, role),
-        new Claim(JwtRegisteredClaimNames.Sub, username),
-        new Claim("role", role) // kısa anahtar
-    };
-    if (!string.IsNullOrWhiteSpace(email)) {
-        claims.Add(new Claim(ClaimTypes.Email, email));
-        claims.Add(new Claim("email", email));
-    }
-    if (!string.IsNullOrWhiteSpace(phone)) {
-        claims.Add(new Claim(ClaimTypes.MobilePhone, phone));
-        claims.Add(new Claim("phone", phone));
-    }
-    ...
-    return new JwtSecurityTokenHandler().WriteToken(token);
-}
-Program.cs (çekirdek yapı)
-Kestrel: HTTP 5000 / HTTPS 5001
+PUT /User/update/{id} → Kullanıcı günceller (Admin, Manager)
 
-CORS: React için 3000 portu
+DELETE /User/delete/{id} → Kullanıcı siler (Admin, Manager)
 
-JWT ayarları
-
-Minimal /login endpoint’i
-
-Örnek (kısaltılmış):
-
-csharp
-Kopyala
-Düzenle
-builder.WebHost.ConfigureKestrel(o => {
-    o.ListenLocalhost(5000);
-    o.ListenLocalhost(5001, lo => lo.UseHttps());
-});
-
-builder.Services.AddDbContext<AppDbContext>(opt =>
-    opt.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
-
-builder.Services.AddCors(opt => {
-    opt.AddPolicy("AllowReact", p => p
-        .WithOrigins("http://localhost:3000", "https://localhost:3000")
-        .AllowAnyHeader().AllowAnyMethod());
-});
-
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(opt => { /* TokenValidationParameters ... */ });
-
-app.UseCors("AllowReact");
-app.UseAuthentication();
-app.UseAuthorization();
-
-app.MapPost("/login", async (LoginModel login, TokenService tokenService, AppDbContext db) =>
-{
-    var user = await db.Users.FirstOrDefaultAsync(u => u.Username == login.Username && u.Password == login.Password);
-    if (user is null) return Results.Unauthorized();
-
-    var token = tokenService.GenerateToken(user.Username, user.Role.ToString(), user.Email, user.Phone);
-    return Results.Ok(new { token });
-});
-Endpoint’ler
-Tüm korumalı endpoint’lerde Authorization: Bearer <token> başlığı gerekir.
-
-Auth
-POST /login → Anonim
-
-json
-Kopyala
-Düzenle
-// Request
-{ "username": "admin", "password": "1234" }
-
-// Response
-{ "token": "eyJhbGciOi..." }
-Users (Controller: UserController)
-GET /User/users → Authorize
-
-Admin/Manager ⇒ tüm kullanıcılar
-
-Chief/Staff ⇒ yalnızca Staff kullanıcıları
-
-GET /User/{id} → Authorize
-
-POST /User/create → Authorize (Admin,Manager)
-
-json
-Kopyala
-Düzenle
-{ "username":"x", "password":"y", "role":3, "email":"a@b.com", "phone":"0555..." }
-PUT /User/update/{id} → Authorize (Admin,Manager)
-
-DELETE /User/delete/{id} → Authorize (Admin,Manager)
-
-Yetkilendirme Matrisi
-Endpoint	Admin	Manager	Chief	Staff
-POST /login	✔	✔	✔	✔
-GET /User/users	✔ (tümü)	✔ (tümü)	✔ (yalnız Staff)	✔ (yalnız Staff)
-GET /User/{id}	✔	✔	✔	✔
-POST /User/create	✔	✔	✖	✖
-PUT /User/update/{id}	✔	✔	✖	✖
-DELETE /User/delete/{id}	✔	✔	✖	✖
-
-JWT Payload Örneği
+7. JWT Payload Örneği
 json
 Kopyala
 Düzenle
 {
-  "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name": "admin",
-  "http://schemas.microsoft.com/ws/2008/06/identity/claims/role": "Admin",
-  "sub": "admin",
-  "role": "Admin",
-  "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress": "ornek@gmail.com",
-  "email": "ornek@gmail.com",
-  "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/mobilephone": "05553332211",
-  "phone": "05553332211",
-  "iss": "JwtAuthApi",
-  "aud": "JwtAuthClient",
-  "exp": 1754990789
+    "name": "admin",
+    "role": "Admin",
+    "email": "ornek@gmail.com",
+    "phone": "05553332211",
+    "iss": "JwtAuthApi",
+    "aud": "JwtAuthClient",
+    "exp": 1754990789
 }
-Geliştirme Notları
-Roles: [Authorize(Roles = "Admin,Manager")] gibi attribute’lar ClaimTypes.Role’u baz alır (TokenService bu claim’i ekler).
+8. Geliştirme Notları
+[Authorize(Roles = "Admin,Manager")] gibi attribute’lar ClaimTypes.Role üzerinden çalışır.
 
-Token süresi: Jwt:ExpireMinutes. Production’da kısa tutmanız önerilir.
+Token süresi Jwt:ExpireMinutes ile belirlenir.
 
-Kişisel veri (PII) token’da: zorunlu değilse koymayın; HTTPS zorunludur.
+Kişisel veriler zorunlu olmadıkça token içinde taşınmamalıdır.
 
-CORS: Geliştirmede 3000 portuna izin verildi. Farklı front-end portu için AllowReact politikasını güncelleyin.
-
-Sorun Giderme
-Email/Phone jwt.io’da görünmüyor
-
-/login veya /User/login token üretiminde user.Email/user.Phone geçirildi mi?
-
-DB’de ilgili alanlar dolu mu?
-
-Yeniden login oldun mu (yeni token)?
-
-“More than one DbContext was found”
-
-Sadece AppDbContext kalsın veya komutlarda --context AppDbContext kullan.
-
-HTTPS uyarısı
-
-dotnet dev-certs https --trust
-
-Kestrel 5000/5001 portları açık mı?
+CORS politikası React için localhost:3000 portuna izin verir.
