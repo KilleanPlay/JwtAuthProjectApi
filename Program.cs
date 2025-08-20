@@ -4,6 +4,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Security.Claims;
 using System.Text;
+using System.Net.Http; // ⬅ eklendi
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -35,6 +36,7 @@ builder.Services.AddCors(options =>
         )
         .AllowAnyHeader()
         .AllowAnyMethod();
+        // .AllowCredentials(); // Cookie forward edeceksen aç
     });
 });
 
@@ -51,13 +53,26 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             ValidIssuer = jwtSettings["Issuer"],
             ValidAudience = jwtSettings["Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings["Key"]!))
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings["Key"]!)),
+
+            // ⬇ rol ve isim claim'leri için açık tanım
+            NameClaimType = ClaimTypes.Name,
+            RoleClaimType = ClaimTypes.Role
         };
     });
 
 builder.Services.AddAuthorization();
 builder.Services.AddSingleton<TokenService>();
 builder.Services.AddControllers();
+
+// 🔹 Downstream Health API için HttpClient
+builder.Services.AddHttpClient("health", (sp, client) =>
+{
+    var cfg = sp.GetRequiredService<IConfiguration>();
+    var baseUrl = cfg["Downstreams:HealthApiBase"]
+                  ?? throw new InvalidOperationException("Downstreams:HealthApiBase is missing in appsettings.json");
+    client.BaseAddress = new Uri(baseUrl);
+});
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
@@ -103,7 +118,7 @@ app.UseCors("AllowReact");
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Giriş endpoint'i
+// 🔑 Giriş endpoint'i
 app.MapPost("/login", async (LoginModel login, TokenService tokenService, AppDbContext db) =>
 {
     var user = await db.Users
@@ -123,7 +138,7 @@ app.MapPost("/login", async (LoginModel login, TokenService tokenService, AppDbC
     return Results.Ok(new { token });
 });
 
-// Örnek endpoint
+// 🧪 Örnek endpoint
 app.MapGet("/weatherforecast", () =>
 {
     var summaries = new[]
@@ -143,6 +158,7 @@ app.MapGet("/weatherforecast", () =>
 })
 .RequireAuthorization();
 
+// 🔐 Sadece Admin & Manager
 app.MapGet("/admin-manager-only", (ClaimsPrincipal user) =>
 {
     var username = user.Identity?.Name;
@@ -150,6 +166,75 @@ app.MapGet("/admin-manager-only", (ClaimsPrincipal user) =>
 })
 .RequireAuthorization(policy => policy.RequireRole("Admin", "Manager"));
 
+// 🔁 PROXY: Health API → /health/details
+app.MapGet("/admin/health/details-proxy", async (
+    HttpContext context,
+    IHttpClientFactory httpFactory) =>
+{
+    // Authentication zorunlu
+    if (!context.User.Identity?.IsAuthenticated ?? true)
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        return;
+    }
+
+    // RBAC: Sadece Admin & Manager
+    if (!context.User.IsInRole("Admin") && !context.User.IsInRole("Manager"))
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        return;
+    }
+
+    var http = httpFactory.CreateClient("health");
+    var msg = new HttpRequestMessage(HttpMethod.Get, "/health/details");
+
+    // Authorization header'ını downstream'e aktar (null-safe)
+    var authValue = context.Request.Headers.Authorization.ToString();
+    if (!string.IsNullOrWhiteSpace(authValue))
+        msg.Headers.TryAddWithoutValidation("Authorization", authValue);
+
+    // Downstream çağrısı
+    var resp = await http.SendAsync(msg, HttpCompletionOption.ResponseHeadersRead);
+
+    // Status code ve Content-Type'ı aynen geçir
+    context.Response.StatusCode = (int)resp.StatusCode;
+    context.Response.ContentType = resp.Content.Headers.ContentType?.ToString() ?? "application/json";
+
+    // İçeriği stream ederek kopyala
+    await resp.Content.CopyToAsync(context.Response.Body);
+})
+.RequireAuthorization(); // pipeline seviyesinde de auth kontrolü
+// 🔁 PROXY: Health API → /health
+app.MapGet("/admin/health/proxy", async (
+    HttpContext context,
+    IHttpClientFactory httpFactory) =>
+{
+    if (!context.User.Identity?.IsAuthenticated ?? true)
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        return;
+    }
+
+    if (!context.User.IsInRole("Admin") && !context.User.IsInRole("Manager"))
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        return;
+    }
+
+    var http = httpFactory.CreateClient("health");
+    var msg = new HttpRequestMessage(HttpMethod.Get, "/health");
+
+    var authValue = context.Request.Headers.Authorization.ToString();
+    if (!string.IsNullOrWhiteSpace(authValue))
+        msg.Headers.TryAddWithoutValidation("Authorization", authValue);
+
+    var resp = await http.SendAsync(msg, HttpCompletionOption.ResponseHeadersRead);
+
+    context.Response.StatusCode = (int)resp.StatusCode;
+    context.Response.ContentType = resp.Content.Headers.ContentType?.ToString() ?? "application/json";
+    await resp.Content.CopyToAsync(context.Response.Body);
+})
+.RequireAuthorization();
 app.MapControllers();
 
 app.Run();
